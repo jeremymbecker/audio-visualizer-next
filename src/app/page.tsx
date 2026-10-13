@@ -1,4 +1,4 @@
-import Image from "next/image";
+/*import Image from "next/image";
 import styles from "./page.module.css";
 
 export default function Home() {
@@ -66,4 +66,10 @@ export default function Home() {
       </main>
     </div>
   );
+}
+*/
+import AudioVisualizer from "@/components/AudioVisualizer";
+
+export default function Home() {
+  return <AudioVisualizer />;
 }

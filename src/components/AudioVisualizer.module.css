@@ -1,0 +1,149 @@
+/* Full-screen container. The bottom padding leaves room for the controls bar,
+   so the album cover centers in the space above it. */
+.root {
+  position: relative;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 206px;
+  background-color: #10102a; /* shows if a preset image is missing */
+  background-size: cover;
+  background-repeat: no-repeat;
+  background-position: center;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.albumCover {
+  width: min(400px, 80vw, calc(100dvh - 260px));
+  aspect-ratio: 1;
+  background-size: cover;
+  background-position: center;
+}
+
+/* Controls bar pinned to the bottom of the screen */
+.controlsBar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 100%;
+  min-height: 206px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(235, 235, 235, 0.85);
+}
+
+.sliderRow {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding-top: 20px;
+}
+
+.time {
+  padding: 10px;
+  color: black;
+  font-variant-numeric: tabular-nums;
+}
+
+.songInfo {
+  display: flex;
+  flex-direction: column;
+}
+
+.songTitle {
+  margin: 0;
+  text-align: center;
+  font-size: 28px;
+}
+
+.songArtist {
+  margin: 0;
+  padding: 5px 0 20px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.controls {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px 10px;
+}
+
+.playControls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.volumeControls {
+  display: flex;
+  align-items: center;
+}
+
+/* Sliders: shared look. The colored fill comes from an inline style. */
+.seekSlider,
+.volumeSlider {
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.seekSlider {
+  width: 90%;
+  height: 2px;
+}
+
+.seekSlider:disabled {
+  cursor: default;
+}
+
+/* Volume slider stays hidden until you hover over (or tab to) the volume area */
+.volumeSlider {
+  display: none;
+  width: 200px;
+  height: 6px;
+  margin: 0 10px 0 0;
+  border-radius: 12px;
+}
+
+.volumeControls:hover .volumeSlider,
+.volumeControls:focus-within .volumeSlider {
+  display: block;
+}
+
+.seekSlider::-webkit-slider-thumb,
+.volumeSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 12px;
+  background: rgb(251, 243, 236);
+}
+
+.seekSlider::-moz-range-thumb,
+.volumeSlider::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border: none;
+  border-radius: 12px;
+  background: rgb(251, 243, 236);
+}
