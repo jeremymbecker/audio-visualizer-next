@@ -28,6 +28,7 @@ import VolumeDownIcon from "@mui/icons-material/VolumeDown";
 import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import { convertToMp3 } from "@/lib/convertToMP3";
+import { extractPalette } from "@/lib/extractPalette";
 import styles from "./AudioVisualizer.module.css";
 
 /**
@@ -43,7 +44,7 @@ export type Song = {
   cover: string | null;
 };
 
-type Preset = { id: string; name: string; image: string };
+//type Preset = { id: string; name: string; image: string };
 
 /** The message shown at the top of the screen about a song that can't play. */
 type Notice =
@@ -53,11 +54,40 @@ type Notice =
   | { kind: "convertFailed"; songId: string };
 
 // Background images hosted in S3.
-const IMAGE_BASE = "https://jeremymbeckerbucket.s3.us-west-1.amazonaws.com";
+/*const IMAGE_BASE = "https://jeremymbeckerbucket.s3.us-west-1.amazonaws.com";
 
 const PRESETS: Preset[] = [
   { id: "default", name: "Default", image: `${IMAGE_BASE}/Music_Is_Fun.jpg` },
   { id: "retrowave", name: "Retrowave", image: `${IMAGE_BASE}/Retrowave.jpg` },
+  { id: "sunset", name: "Sunset at Beach", image: `${IMAGE_BASE}/Sunset_At_Beach.jpg` },
+  { id: "clouds", name: "Above the Clouds", image: `${IMAGE_BASE}/Above_The_Clouds.png` },
+];
+*/
+/** A gradient color at a position from 0 (bottom of a bar) to 1 (top). */
+type ColorStop = [offset: number, color: string];
+type Preset = { id: string; name: string; image: string; colors?: ColorStop[] };
+
+// The original hand-picked bar colors: blue at the bottom, yellow at the top.
+const RETROWAVE_COLORS: ColorStop[] = [
+  [0, "#3B16DE"],
+  [0.075, "#071AD6"],
+  [0.175, "#66209d"],
+  [0.275, "#AF0D49"],
+  [0.375, "#F20A08"],
+  [0.5, "#F22707"],
+  [0.625, "#FF4E15"],
+  [0.75, "#F96A0A"],
+  [0.875, "#F8990B"],
+  [1, "#F1E60E"],
+];
+
+// Background images hosted in S3.
+const IMAGE_BASE = "https://jeremymbeckerbucket.s3.us-west-1.amazonaws.com";
+
+// Presets with `colors` use those. The rest get colors picked from their image.
+const PRESETS: Preset[] = [
+  { id: "default", name: "Default", image: `${IMAGE_BASE}/Music_Is_Fun.jpg` },
+  { id: "retrowave", name: "Retrowave", image: `${IMAGE_BASE}/Retrowave.jpg`, colors: RETROWAVE_COLORS },
   { id: "sunset", name: "Sunset at Beach", image: `${IMAGE_BASE}/Sunset_At_Beach.jpg` },
   { id: "clouds", name: "Above the Clouds", image: `${IMAGE_BASE}/Above_The_Clouds.png` },
 ];
@@ -107,7 +137,10 @@ export default function AudioVisualizer() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const lastVolumeRef = useRef(100);
+  const gradientRef = useRef<CanvasGradient | null>(null);
+  const palettesStartedRef = useRef(new Set<string>());
 
+  const [autoPalettes, setAutoPalettes] = useState<Record<string, ColorStop[]>>({});
   const [playlist, setPlaylist] = useState<Song[]>([]);
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -123,6 +156,9 @@ export default function AudioVisualizer() {
 
   const currentSong = currentIndex === null ? null : (playlist[currentIndex] ?? null);
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
+  
+  // Hand-picked colors win, then colors read from the image. Null means still loading.
+  const barColors = preset.colors ?? autoPalettes[preset.id] ?? null;
   const progress = duration ? (currentTime / duration) * 100 : 0;
   const noticeSong = notice ? playlist.find((s) => s.id === notice.songId) : undefined;
 
@@ -130,6 +166,35 @@ export default function AudioVisualizer() {
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = volume / 100;
   }, [volume]);
+
+  // Work out colors from the background images: the current one right away,
+  // and all of them once the Presets list is opened, so each is ready before it's clicked.
+  useEffect(() => {
+    const toLoad = presetsOpen ? PRESETS : [preset];
+    for (const p of toLoad) {
+      if (p.colors || palettesStartedRef.current.has(p.id)) continue;
+      palettesStartedRef.current.add(p.id);
+      extractPalette(p.image)
+        .then((colors) => {
+          const stops = colors.map((color, i): ColorStop => [i / (colors.length - 1), color]);
+          setAutoPalettes((prev) => ({ ...prev, [p.id]: stops }));
+        })
+        .catch((error) => {
+          console.warn(`Couldn't read colors from the ${p.name} background`, error);
+          setAutoPalettes((prev) => ({ ...prev, [p.id]: RETROWAVE_COLORS }));
+        });
+    }
+  }, [preset, presetsOpen]);
+
+  // Rebuild the bar gradient when the colors change. While new colors are
+  // still loading, the previous gradient stays in place.
+  useEffect(() => {
+    const ctx = canvasRef.current?.getContext("2d");
+    if (!ctx || !barColors) return;
+    const gradient = ctx.createLinearGradient(0, 0, 0, 1);
+    for (const [offset, color] of barColors) gradient.addColorStop(offset, color);
+    gradientRef.current = gradient;
+  }, [barColors]);
 
   // Size the canvas to the window and run the drawing loop.
   useEffect(() => {
@@ -178,6 +243,10 @@ export default function AudioVisualizer() {
       const baseline = canvas.height - CONTROLS_HEIGHT;
       const maxBarHeight = Math.max(0, Math.min(510, baseline - 20));
       const barWidth = canvas.width / BAR_COUNT;
+      //ctx.fillStyle = gradient;
+      const gradient = gradientRef.current;
+      if (!gradient) 
+        return;
       ctx.fillStyle = gradient;
 
       for (let i = 0; i < BAR_COUNT; i++) {
