@@ -52,16 +52,18 @@ type Notice =
   | { kind: "converted"; songId: string }
   | { kind: "convertFailed"; songId: string };
 
-// Put these images in public/backgrounds/. If a file is missing,
-// the dark background color from the CSS shows instead.
+// Background images hosted in S3.
+const IMAGE_BASE = "https://jeremymbeckerbucket.s3.us-west-1.amazonaws.com";
+
 const PRESETS: Preset[] = [
-  { id: "default", name: "Default", image: "/backgrounds/default.jpg" },
-  { id: "retrowave", name: "Retrowave", image: "/backgrounds/retrowave.jpg" },
-  { id: "sunset", name: "Sunset at Beach", image: "/backgrounds/sunset-beach.jpg" },
-  { id: "clouds", name: "Above the Clouds", image: "/backgrounds/above-the-clouds.png" },
+  { id: "default", name: "Default", image: `${IMAGE_BASE}/Music_Is_Fun.jpg` },
+  { id: "retrowave", name: "Retrowave", image: `${IMAGE_BASE}/Retrowave.jpg` },
+  { id: "sunset", name: "Sunset at Beach", image: `${IMAGE_BASE}/Sunset_At_Beach.jpg` },
+  { id: "clouds", name: "Above the Clouds", image: `${IMAGE_BASE}/Above_The_Clouds.png` },
 ];
 
 const BAR_COUNT = 512;
+const CONTROLS_HEIGHT = 206;
 const iconSx = { color: "black", fontSize: 48 };
 
 function formatTime(seconds: number): string {
@@ -142,24 +144,27 @@ export default function AudioVisualizer() {
     resize();
     window.addEventListener("resize", resize);
 
-    // Built once instead of 512 times per frame.
-    const gradient = ctx.createLinearGradient(0, 200, 0, 550);
-    gradient.addColorStop(1, "#3B16DE");
-    gradient.addColorStop(0.97, "#071AD6");
-    gradient.addColorStop(0.93, "#66209d");
-    gradient.addColorStop(0.89, "#AF0D49");
-    gradient.addColorStop(0.85, "#F20A08");
-    gradient.addColorStop(0.8, "#F22707");
-    gradient.addColorStop(0.75, "#FF4E15");
-    gradient.addColorStop(0.7, "#F96A0A");
-    gradient.addColorStop(0.65, "#F8990B");
-    gradient.addColorStop(0.6, "#F1E60E");
+    // One gradient in a 0-to-1 space: 0 is the bottom of a bar, 1 is the top.
+    // Each bar stretches that space to its own size, so every bar shows the
+    // full gradient, and only one gradient is ever created.
+    const gradient = ctx.createLinearGradient(0, 0, 0, 1);
+    gradient.addColorStop(0, "#3B16DE");
+    gradient.addColorStop(0.075, "#071AD6");
+    gradient.addColorStop(0.175, "#66209d");
+    gradient.addColorStop(0.275, "#AF0D49");
+    gradient.addColorStop(0.375, "#F20A08");
+    gradient.addColorStop(0.5, "#F22707");
+    gradient.addColorStop(0.625, "#FF4E15");
+    gradient.addColorStop(0.75, "#F96A0A");
+    gradient.addColorStop(0.875, "#F8990B");
+    gradient.addColorStop(1, "#F1E60E");
 
     let data = new Uint8Array(0);
     let frameId = 0;
 
     const draw = () => {
       frameId = requestAnimationFrame(draw);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const analyser = analyserRef.current;
@@ -170,12 +175,19 @@ export default function AudioVisualizer() {
       }
       analyser.getByteFrequencyData(data);
 
+      const baseline = canvas.height - CONTROLS_HEIGHT;
+      const maxBarHeight = Math.max(0, Math.min(510, baseline - 20));
       const barWidth = canvas.width / BAR_COUNT;
       ctx.fillStyle = gradient;
+
       for (let i = 0; i < BAR_COUNT; i++) {
-        const barHeight = data[(i + 10) * 10] * 2;
-        ctx.fillRect(i * barWidth, (canvas.height - barHeight - 330) / 1.4, barWidth, barHeight);
+        const barHeight = (data[(i + 10) * 10] / 255) * maxBarHeight;
+        if (barHeight < 1) continue;
+        // Stretch a 1x1 square into this bar: starting at the baseline and growing upward.
+        ctx.setTransform(barWidth, 0, 0, -barHeight, i * barWidth, baseline);
+        ctx.fillRect(0, 0, 1, 1);
       }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
     };
     frameId = requestAnimationFrame(draw);
 
