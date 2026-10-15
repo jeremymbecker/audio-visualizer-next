@@ -3,15 +3,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import Alert from "@mui/material/Alert";
-import Snackbar from "@mui/material/Snackbar";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Collapse from "@mui/material/Collapse";
 import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
+import LinearProgress from "@mui/material/LinearProgress";
 import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemText from "@mui/material/ListItemText";
+import Snackbar from "@mui/material/Snackbar";
+import CloseIcon from "@mui/icons-material/Close";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -25,6 +27,7 @@ import SkipPreviousIcon from "@mui/icons-material/SkipPrevious";
 import VolumeDownIcon from "@mui/icons-material/VolumeDown";
 import VolumeOffIcon from "@mui/icons-material/VolumeOff";
 import VolumeUpIcon from "@mui/icons-material/VolumeUp";
+import { convertToMp3 } from "@/lib/convertToMP3";
 import styles from "./AudioVisualizer.module.css";
 
 /**
@@ -42,13 +45,20 @@ export type Song = {
 
 type Preset = { id: string; name: string; image: string };
 
+/** The message shown at the top of the screen about a song that can't play. */
+type Notice =
+  | { kind: "unsupported"; songId: string }
+  | { kind: "converting"; songId: string; progress: number | null }
+  | { kind: "converted"; songId: string }
+  | { kind: "convertFailed"; songId: string };
+
 // Put these images in public/backgrounds/. If a file is missing,
 // the dark background color from the CSS shows instead.
 const PRESETS: Preset[] = [
   { id: "default", name: "Default", image: "/backgrounds/default.jpg" },
   { id: "retrowave", name: "Retrowave", image: "/backgrounds/retrowave.jpg" },
   { id: "sunset", name: "Sunset at Beach", image: "/backgrounds/sunset-beach.jpg" },
-  { id: "clouds", name: "Above the Clouds", image: "/backgrounds/above-the-clouds.jpg" },
+  { id: "clouds", name: "Above the Clouds", image: "/backgrounds/above-the-clouds.png" },
 ];
 
 const BAR_COUNT = 512;
@@ -74,9 +84,7 @@ async function readSong(file: File): Promise<Song> {
   try {
     // Loaded only when someone uploads, so it isn't part of the initial page load.
     const { parseBlob } = await import("music-metadata");
-    //const { common } = await parseBlob(file);
-    const { common, format } = await parseBlob(file);
-    console.log(file.name, "| codec:", format.codec, "| container:", format.container);
+    const { common } = await parseBlob(file);
     if (common.title) song.title = common.title;
     if (common.artist) song.artist = common.artist;
     const picture = common.picture?.[0];
@@ -109,11 +117,12 @@ export default function AudioVisualizer() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
-  const [playbackError, setPlaybackError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
 
   const currentSong = currentIndex === null ? null : (playlist[currentIndex] ?? null);
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const progress = duration ? (currentTime / duration) * 100 : 0;
+  const noticeSong = notice ? playlist.find((s) => s.id === notice.songId) : undefined;
 
   // Keep the audio element's volume in sync with the slider.
   useEffect(() => {
@@ -209,6 +218,8 @@ export default function AudioVisualizer() {
       audio.src = song.src;
       setCurrentTime(0);
       setDuration(0);
+      // Clear an old message when switching songs, unless a conversion is running.
+      setNotice((prev) => (prev?.kind === "converting" ? prev : null));
     }
     setCurrentIndex(index);
     audio.play().catch((error) => console.warn("Playback failed", error));
@@ -257,6 +268,39 @@ export default function AudioVisualizer() {
     setPlaylistOpen(true);
   };
 
+  /** Converts a song that won't play into an MP3, swaps it into the playlist, and plays it. */
+  const handleConvert = async (songId: string) => {
+    const index = playlist.findIndex((s) => s.id === songId);
+    const song = playlist[index];
+    if (!song) return;
+
+    setNotice({ kind: "converting", songId, progress: null });
+    try {
+      const original = await (await fetch(song.src)).blob();
+      const mp3 = await convertToMp3(original, (p) =>
+        setNotice({ kind: "converting", songId, progress: p }),
+      );
+      const mp3Url = URL.createObjectURL(mp3);
+      setPlaylist((prev) => prev.map((s) => (s.id === songId ? { ...s, src: mp3Url } : s)));
+      setNotice({ kind: "converted", songId });
+
+      // Only start playing if the user hasn't moved on to a different song meanwhile.
+      const audio = audioRef.current;
+      if (audio && audio.src === song.src) {
+        ensureAudioGraph();
+        audio.src = mp3Url;
+        setCurrentIndex(index);
+        setCurrentTime(0);
+        setDuration(0);
+        audio.play().catch((error) => console.warn("Playback failed", error));
+      }
+      URL.revokeObjectURL(song.src); // free the original file's memory
+    } catch (error) {
+      console.warn("Conversion failed", error);
+      setNotice({ kind: "convertFailed", songId });
+    }
+  };
+
   const handleSeek = (event: ChangeEvent<HTMLInputElement>) => {
     const audio = audioRef.current;
     if (!audio || !duration) return;
@@ -274,7 +318,15 @@ export default function AudioVisualizer() {
     }
   };
 
+  const dismissNotice = () => setNotice(null);
+
   const VolumeIcon = volume === 0 ? VolumeOffIcon : volume < 50 ? VolumeDownIcon : VolumeUpIcon;
+
+  const closeButton = (
+    <IconButton size="small" color="inherit" aria-label="Dismiss" onClick={dismissNotice}>
+      <CloseIcon fontSize="small" />
+    </IconButton>
+  );
 
   return (
     <div className={styles.root} style={{ backgroundImage: `url(${preset.image})` }}>
@@ -288,9 +340,13 @@ export default function AudioVisualizer() {
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
         onEnded={playNext}
-        onError={() =>
-          setPlaybackError("This song's format can't be played in this browser. Try converting it to MP3 or AAC.")
-        }
+        onError={() => {
+          const song = currentSong;
+          if (!song) return;
+          setNotice((prev) =>
+            prev?.kind === "converting" ? prev : { kind: "unsupported", songId: song.id },
+          );
+        }}
       />
 
       <div
@@ -325,7 +381,14 @@ export default function AudioVisualizer() {
 
         <div className={styles.controls}>
           <div>
-            <IconButton aria-label="Open menu" onClick={(e) => {e.currentTarget.blur(); setDrawerOpen(true);}} sx={iconSx}>
+            <IconButton
+              aria-label="Open menu"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                setDrawerOpen(true);
+              }}
+              sx={iconSx}
+            >
               <MenuIcon fontSize="inherit" />
             </IconButton>
           </div>
@@ -428,16 +491,73 @@ export default function AudioVisualizer() {
           </Box>
         </Box>
       </Drawer>
-      <Snackbar
-        open={playbackError !== null}
-        autoHideDuration={6000}
-        onClose={() => setPlaybackError(null)}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
-      >
-        <Alert severity="error" variant="filled" onClose={() => setPlaybackError(null)}>
-          {playbackError}
-        </Alert>
-      </Snackbar>
+
+      {notice && noticeSong && (
+        <Snackbar
+          open
+          anchorOrigin={{ vertical: "top", horizontal: "center" }}
+          autoHideDuration={notice.kind === "converted" ? 8000 : null}
+          onClose={(_, reason) => {
+            if (reason === "clickaway" || notice.kind === "converting") return;
+            dismissNotice();
+          }}
+        >
+          {notice.kind === "unsupported" ? (
+            <Alert
+              severity="warning"
+              variant="filled"
+              action={
+                <>
+                  <Button color="inherit" size="small" onClick={() => handleConvert(notice.songId)}>
+                    Convert to MP3
+                  </Button>
+                  {closeButton}
+                </>
+              }
+            >
+              &ldquo;{noticeSong.title}&rdquo; can&apos;t play in this browser.
+            </Alert>
+          ) : notice.kind === "converting" ? (
+            <Alert severity="info" variant="filled" sx={{ minWidth: 320 }}>
+              Converting &ldquo;{noticeSong.title}&rdquo;
+              {notice.progress === null
+                ? " (loading converter, first time only)…"
+                : ` ${Math.round(notice.progress * 100)}%`}
+              <LinearProgress
+                color="inherit"
+                variant={notice.progress === null ? "indeterminate" : "determinate"}
+                value={(notice.progress ?? 0) * 100}
+                sx={{ mt: 1 }}
+              />
+            </Alert>
+          ) : notice.kind === "converted" ? (
+            <Alert
+              severity="success"
+              variant="filled"
+              action={
+                <>
+                  <Button
+                    color="inherit"
+                    size="small"
+                    component="a"
+                    href={noticeSong.src}
+                    download={`${noticeSong.title}.mp3`}
+                  >
+                    Download
+                  </Button>
+                  {closeButton}
+                </>
+              }
+            >
+              &ldquo;{noticeSong.title}&rdquo; converted to MP3.
+            </Alert>
+          ) : (
+            <Alert severity="error" variant="filled" onClose={dismissNotice}>
+              Couldn&apos;t convert &ldquo;{noticeSong.title}&rdquo;. Check the browser console for details.
+            </Alert>
+          )}
+        </Snackbar>
+      )}
     </div>
   );
 }
