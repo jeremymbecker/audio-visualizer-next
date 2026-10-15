@@ -30,6 +30,12 @@ import VolumeUpIcon from "@mui/icons-material/VolumeUp";
 import { convertToMp3 } from "@/lib/convertToMP3";
 import { extractPalette } from "@/lib/extractPalette";
 import styles from "./AudioVisualizer.module.css";
+import ListItem from "@mui/material/ListItem";
+import Typography from "@mui/material/Typography";
+import AddPhotoAlternateIcon from "@mui/icons-material/AddPhotoAlternate";
+import DeleteIcon from "@mui/icons-material/Delete";
+import { deleteBackground, listBackgrounds, saveBackground } from "@/lib/backgroundStore";
+import { BackgroundImageError, prepareBackgroundImage } from "@/lib/prepareImage";
 
 /**
  * One song in the playlist. Right now `src` and `cover` are local blob: URLs
@@ -65,7 +71,7 @@ const PRESETS: Preset[] = [
 */
 /** A gradient color at a position from 0 (bottom of a bar) to 1 (top). */
 type ColorStop = [offset: number, color: string];
-type Preset = { id: string; name: string; image: string; colors?: ColorStop[] };
+type Preset = { id: string; name: string; image: string; colors?: ColorStop[]; custom?: boolean };
 
 // The original hand-picked bar colors: blue at the bottom, yellow at the top.
 const RETROWAVE_COLORS: ColorStop[] = [
@@ -153,9 +159,13 @@ export default function AudioVisualizer() {
   const [playlistOpen, setPlaylistOpen] = useState(false);
   const [presetsOpen, setPresetsOpen] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [customPresets, setCustomPresets] = useState<Preset[]>([]);
+  const [backgroundError, setBackgroundError] = useState<string | null>(null);
 
   const currentSong = currentIndex === null ? null : (playlist[currentIndex] ?? null);
-  const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
+  //const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
+  const allPresets = [...PRESETS, ...customPresets];
+  const preset = allPresets.find((p) => p.id === presetId) ?? PRESETS[0];
   
   // Hand-picked colors win, then colors read from the image. Null means still loading.
   const barColors = preset.colors ?? autoPalettes[preset.id] ?? null;
@@ -167,10 +177,33 @@ export default function AudioVisualizer() {
     if (audioRef.current) audioRef.current.volume = volume / 100;
   }, [volume]);
 
+  // Load the user's saved backgrounds from this browser.
+  useEffect(() => {
+    let cancelled = false;
+    const urls: string[] = [];
+    listBackgrounds()
+      .then((stored) => {
+        if (cancelled) return;
+        setCustomPresets(
+          stored.map((bg) => {
+            const url = URL.createObjectURL(bg.blob);
+            urls.push(url);
+            return { id: bg.id, name: bg.name, image: url, custom: true };
+          }),
+        );
+      })
+      .catch((error) => console.warn("Couldn't load saved backgrounds", error));
+    return () => {
+      cancelled = true;
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, []);
+
   // Work out colors from the background images: the current one right away,
   // and all of them once the Presets list is opened, so each is ready before it's clicked.
   useEffect(() => {
-    const toLoad = presetsOpen ? PRESETS : [preset];
+    //const toLoad = presetsOpen ? PRESETS : [preset];
+    const toLoad = presetsOpen ? [...PRESETS, ...customPresets] : [preset];
     for (const p of toLoad) {
       if (p.colors || palettesStartedRef.current.has(p.id)) continue;
       palettesStartedRef.current.add(p.id);
@@ -184,7 +217,8 @@ export default function AudioVisualizer() {
           setAutoPalettes((prev) => ({ ...prev, [p.id]: RETROWAVE_COLORS }));
         });
     }
-  }, [preset, presetsOpen]);
+    //}, [preset, presetsOpen]);
+  }, [preset, presetsOpen, customPresets]);
 
   // Rebuild the bar gradient when the colors change. While new colors are
   // still loading, the previous gradient stays in place.
@@ -347,6 +381,42 @@ export default function AudioVisualizer() {
     const songs = await Promise.all(files.map(readSong));
     setPlaylist((previous) => [...previous, ...songs]);
     setPlaylistOpen(true);
+  };
+
+  /** Checks, re-saves and stores a background the user picked, then switches to it. */
+  const handleBackgroundUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = ""; // lets you pick the same file again later
+    if (!file) return;
+    setBackgroundError(null);
+
+    try {
+      const blob = await prepareBackgroundImage(file);
+      const id = `custom-${crypto.randomUUID()}`;
+      const name = file.name.replace(/\.[^/.]+$/, "").slice(0, 40) || "My background";
+      await saveBackground({ id, name, blob, createdAt: Date.now() });
+      setCustomPresets((prev) => [...prev, { id, name, image: URL.createObjectURL(blob), custom: true }]);
+      setPresetId(id);
+    } catch (error) {
+      console.warn("Couldn't add background", error);
+      setBackgroundError(
+        error instanceof BackgroundImageError
+          ? error.message
+          : "Couldn't save that background. Your browser's storage may be full.",
+      );
+    }
+  };
+
+  const handleDeleteBackground = async (custom: Preset) => {
+    try {
+      await deleteBackground(custom.id);
+    } catch (error) {
+      console.warn("Couldn't delete background", error);
+      return;
+    }
+    if (presetId === custom.id) setPresetId(PRESETS[0].id);
+    setCustomPresets((prev) => prev.filter((p) => p.id !== custom.id));
+    URL.revokeObjectURL(custom.image);
   };
 
   /** Converts a song that won't play into an MP3, swaps it into the playlist, and plays it. */
@@ -549,18 +619,50 @@ export default function AudioVisualizer() {
               {presetsOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
             </ListItemButton>
             <Collapse in={presetsOpen} timeout="auto" unmountOnExit>
-              <List disablePadding>
-                {PRESETS.map((p) => (
-                  <ListItemButton
+              <List disablePadding sx={{ maxHeight: 300, overflow: "auto" }}>
+                {allPresets.map((p) => (
+                  <ListItem
                     key={p.id}
-                    sx={{ pl: 4 }}
-                    selected={p.id === presetId}
-                    onClick={() => setPresetId(p.id)}
+                    disablePadding
+                    secondaryAction={
+                      p.custom ? (
+                        <IconButton
+                          edge="end"
+                          size="small"
+                          aria-label={`Delete ${p.name}`}
+                          onClick={() => handleDeleteBackground(p)}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      ) : undefined
+                    }
                   >
-                    <ListItemText primary={p.name} />
-                  </ListItemButton>
+                    <ListItemButton
+                      sx={{ pl: 4 }}
+                      selected={p.id === presetId}
+                      onClick={() => setPresetId(p.id)}
+                    >
+                      <ListItemText primary={p.name} />
+                    </ListItemButton>
+                  </ListItem>
                 ))}
               </List>
+              <Box sx={{ pl: 3, pr: 2, py: 1 }}>
+                <Button component="label" size="small" startIcon={<AddPhotoAlternateIcon />}>
+                  Add your own
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    hidden
+                    onChange={handleBackgroundUpload}
+                  />
+                </Button>
+                {backgroundError && (
+                  <Typography variant="body2" color="error" sx={{ mt: 1 }}>
+                    {backgroundError}
+                  </Typography>
+                )}
+              </Box>
             </Collapse>
           </List>
 

@@ -7,7 +7,14 @@ export async function extractPalette(url: string, count = 5): Promise<string[]> 
   img.crossOrigin = "anonymous";
   // The extra query keeps the browser from reusing the copy it loaded for the
   // CSS background, which was fetched without permission to read its pixels.
-  img.src = `${url}${url.includes("?") ? "&" : "?"}palette=1`;
+  //img.src = `${url}${url.includes("?") ? "&" : "?"}palette=1`;
+  
+  // For web images, the extra query keeps the browser from reusing the copy it
+  // loaded for the CSS background without permission to read its pixels.
+  // Uploaded images (blob: URLs) are local, so they're used as-is.
+  img.src = url.startsWith("blob:")
+    ? url
+    : `${url}${url.includes("?") ? "&" : "?"}palette=1`;
   await img.decode();
 
   // A small copy is plenty for finding the main colors, and much faster.
